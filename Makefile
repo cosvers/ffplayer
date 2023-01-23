@@ -30,5 +30,5 @@ bin/$(OUTPUT):
 	$(GPP) -o $@ $(OBJECTS) $(C_OBJECTS) $(LIB)
 
 clean:
-	$(RM) $(OBJECTS) $(C_OBJECTS)
+	$(RM) $(OBJECTS) $(C_OBJECTS) bin/$(OUTPUT)
 	
