@@ -279,28 +279,20 @@ typedef struct VideoState
 } VideoState;
 
 /* options specified by the user */
-static const AVInputFormat *file_iformat;
 static const char *input_filename;
 static int default_width = 640;
 static int default_height = 480;
 static int screen_width = 0;
 static int screen_height = 0;
-static int audio_disable;
-static int video_disable;
 static const char *wanted_stream_spec[AVMEDIA_TYPE_NB] = {0};
 static int seek_by_bytes = -1;
-static float seek_interval = 10;
-static int display_disable;
+static float seek_interval = 10; // in seconds
 static int startup_volume = 100;
 static int av_sync_type = AV_SYNC_AUDIO_MASTER;
 static int64_t start_time = AV_NOPTS_VALUE;
 static int64_t duration = AV_NOPTS_VALUE;
-static int fast = 0;
-static int genpts = 0;
 static int lowres = 0;
 static int decoder_reorder_pts = -1;
-static int autoexit;
-static int exit_on_keydown;
 static int framedrop = -1;
 static int infinite_buffer = -1;
 static int find_stream_info = 1;
@@ -1438,7 +1430,7 @@ static void video_refresh(void *opaque, double *remaining_time)
         }
     display:
         /* display picture */
-        if (!display_disable && is->force_refresh && is->pictq.rindex_shown)
+        if (is->force_refresh && is->pictq.rindex_shown)
             video_display(is);
     }
     is->force_refresh = 0;
@@ -1975,9 +1967,6 @@ static int stream_component_open(VideoState *is, int stream_index)
     }
     avctx->lowres = stream_lowres;
 
-    if (fast)
-        avctx->flags2 |= AV_CODEC_FLAG2_FAST;
-
     opts = filter_codec_opts(codec_opts, avctx->codec_id, ic, ic->streams[stream_index], codec);
     if (!av_dict_get(opts, "threads", NULL, 0))
         av_dict_set(&opts, "threads", "auto", 0);
@@ -2143,9 +2132,6 @@ static int read_thread(void *arg)
     }
     is->ic = ic;
 
-    if (genpts)
-        ic->flags |= AVFMT_FLAG_GENPTS;
-
     av_format_inject_global_side_data(ic);
 
     if (find_stream_info)
@@ -2213,16 +2199,15 @@ static int read_thread(void *arg)
         }
     }
 
-    if (!video_disable)
-        st_index[AVMEDIA_TYPE_VIDEO] =
-            av_find_best_stream(ic, AVMEDIA_TYPE_VIDEO,
-                                st_index[AVMEDIA_TYPE_VIDEO], -1, NULL, 0);
-    if (!audio_disable)
-        st_index[AVMEDIA_TYPE_AUDIO] =
-            av_find_best_stream(ic, AVMEDIA_TYPE_AUDIO,
-                                st_index[AVMEDIA_TYPE_AUDIO],
-                                st_index[AVMEDIA_TYPE_VIDEO],
-                                NULL, 0);
+    st_index[AVMEDIA_TYPE_VIDEO] =
+        av_find_best_stream(ic, AVMEDIA_TYPE_VIDEO,
+                            st_index[AVMEDIA_TYPE_VIDEO], -1, NULL, 0);
+
+    st_index[AVMEDIA_TYPE_AUDIO] =
+        av_find_best_stream(ic, AVMEDIA_TYPE_AUDIO,
+                            st_index[AVMEDIA_TYPE_AUDIO],
+                            st_index[AVMEDIA_TYPE_VIDEO],
+                            NULL, 0);
 
     if (st_index[AVMEDIA_TYPE_VIDEO] >= 0)
     {
@@ -2348,14 +2333,8 @@ static int read_thread(void *arg)
             (!is->audio_st || (is->auddec.finished == is->audioq.serial && frame_queue_nb_remaining(&is->sampq) == 0)) &&
             (!is->video_st || (is->viddec.finished == is->videoq.serial && frame_queue_nb_remaining(&is->pictq) == 0)))
         {
-            // seek to beginning
+            // stream ended - seek to beginning
             // stream_seek(is, start_time != AV_NOPTS_VALUE ? start_time : 0, 0, 0);
-
-            if (autoexit)
-            {
-                ret = AVERROR_EOF;
-                goto fail;
-            }
         }
         ret = av_read_frame(ic, pkt);
         if (ret < 0)
@@ -2370,10 +2349,7 @@ static int read_thread(void *arg)
             }
             if (ic->pb && ic->pb->error)
             {
-                if (autoexit)
-                    goto fail;
-                else
-                    break;
+                break;
             }
             SDL_LockMutex(wait_mutex);
             SDL_CondWaitTimeout(is->continue_read_thread, wait_mutex, 10);
@@ -2424,7 +2400,7 @@ fail:
     return 0;
 }
 
-static VideoState *stream_open(const char *filename, const AVInputFormat *iformat)
+static VideoState *stream_open(const char *filename)
 {
     VideoState *is;
 
@@ -2436,7 +2412,6 @@ static VideoState *stream_open(const char *filename, const AVInputFormat *iforma
     is->filename = av_strdup(filename);
     if (!is->filename)
         goto fail;
-    is->iformat = iformat;
     is->ytop = 0;
     is->xleft = 0;
 
@@ -2613,7 +2588,7 @@ static void event_loop(VideoState *cur_stream)
         switch (event.type)
         {
         case SDL_KEYDOWN:
-            if (exit_on_keydown || event.key.keysym.sym == SDLK_ESCAPE || event.key.keysym.sym == SDLK_q)
+            if (event.key.keysym.sym == SDLK_ESCAPE || event.key.keysym.sym == SDLK_q)
             {
                 do_exit(cur_stream);
                 break;
@@ -2776,29 +2751,6 @@ static void event_loop(VideoState *cur_stream)
     }
 }
 
-static int opt_width(void *optctx, const char *opt, const char *arg)
-{
-    screen_width = parse_number_or_die(opt, arg, OPT_INT64, 1, INT_MAX);
-    return 0;
-}
-
-static int opt_height(void *optctx, const char *opt, const char *arg)
-{
-    screen_height = parse_number_or_die(opt, arg, OPT_INT64, 1, INT_MAX);
-    return 0;
-}
-
-static int opt_format(void *optctx, const char *opt, const char *arg)
-{
-    file_iformat = av_find_input_format(arg);
-    if (!file_iformat)
-    {
-        av_log(NULL, AV_LOG_FATAL, "Unknown input format: %s\n", arg);
-        return AVERROR(EINVAL);
-    }
-    return 0;
-}
-
 static void opt_input_file(void *optctx, const char *filename)
 {
     if (input_filename)
@@ -2814,39 +2766,16 @@ static void opt_input_file(void *optctx, const char *filename)
 }
 
 static const OptionDef options[] = {
-    CMDUTILS_COMMON_OPTIONS{"x", HAS_ARG, {.func_arg = opt_width}, "force displayed width", "width"},
-    {"y", HAS_ARG, {.func_arg = opt_height}, "force displayed height", "height"},
-    {"an", OPT_BOOL, {&audio_disable}, "disable audio"},
-    {"vn", OPT_BOOL, {&video_disable}, "disable video"},
-    {"ast", OPT_STRING | HAS_ARG | OPT_EXPERT, {&wanted_stream_spec[AVMEDIA_TYPE_AUDIO]}, "select desired audio stream", "stream_specifier"},
-    {"vst", OPT_STRING | HAS_ARG | OPT_EXPERT, {&wanted_stream_spec[AVMEDIA_TYPE_VIDEO]}, "select desired video stream", "stream_specifier"},
-    {"bytes", OPT_INT | HAS_ARG, {&seek_by_bytes}, "seek by bytes 0=off 1=on -1=auto", "val"},
-    {"seek_interval", OPT_FLOAT | HAS_ARG, {&seek_interval}, "set seek interval for left/right keys, in seconds", "seconds"},
-    {"nodisp", OPT_BOOL, {&display_disable}, "disable graphical display"},
-    {"f", HAS_ARG, {.func_arg = opt_format}, "force format", "fmt"},
-    {"fast", OPT_BOOL | OPT_EXPERT, {&fast}, "non spec compliant optimizations", ""},
-    {"genpts", OPT_BOOL | OPT_EXPERT, {&genpts}, "generate pts", ""},
-    {"drp", OPT_INT | HAS_ARG | OPT_EXPERT, {&decoder_reorder_pts}, "let decoder reorder pts 0=off 1=on -1=auto", ""},
-    {"lowres", OPT_INT | HAS_ARG | OPT_EXPERT, {&lowres}, "", ""},
-    {"autoexit", OPT_BOOL | OPT_EXPERT, {&autoexit}, "exit at the end", ""},
-    {"exitonkeydown", OPT_BOOL | OPT_EXPERT, {&exit_on_keydown}, "exit on key down", ""},
+    CMDUTILS_COMMON_OPTIONS{"lowres", OPT_INT | HAS_ARG | OPT_EXPERT, {&lowres}, "", ""},
     {"framedrop", OPT_BOOL | OPT_EXPERT, {&framedrop}, "drop frames when cpu is too slow", ""},
     {
         NULL,
     },
 };
 
-static void show_usage(void)
-{
-    av_log(NULL, AV_LOG_INFO, "Simple media player\n");
-    av_log(NULL, AV_LOG_INFO, "usage: %s [options] input_file\n", program_name);
-    av_log(NULL, AV_LOG_INFO, "\n");
-}
-
 void show_help_default(const char *opt, const char *arg)
 {
     av_log_set_callback(log_callback_help);
-    show_usage();
     show_help_options(options, "Main options:", 0, OPT_EXPERT, 0);
     show_help_options(options, "Advanced options:", OPT_EXPERT, 0, 0);
     printf("\n");
@@ -2877,7 +2806,6 @@ int main(int argc, char **argv)
     VideoState *is;
 
     av_log_set_flags(AV_LOG_SKIP_REPEATED);
-    parse_loglevel(argc, argv, options);
 
     /* register all codecs, demux and protocols */
 #if CONFIG_AVDEVICE
@@ -2888,35 +2816,23 @@ int main(int argc, char **argv)
     signal(SIGINT, sigterm_handler);  /* Interrupt (ANSI).    */
     signal(SIGTERM, sigterm_handler); /* Termination (ANSI).  */
 
-    show_banner(argc, argv, options);
-
     parse_options(NULL, argc, argv, options, opt_input_file);
 
     if (!input_filename)
     {
-        show_usage();
         av_log(NULL, AV_LOG_FATAL, "An input file must be specified\n");
         av_log(NULL, AV_LOG_FATAL,
                "Use -h to get full help or, even better, run 'man %s'\n", program_name);
         exit(1);
     }
 
-    if (display_disable)
-    {
-        video_disable = 1;
-    }
     flags = SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_TIMER;
-    if (audio_disable)
-        flags &= ~SDL_INIT_AUDIO;
-    else
-    {
-        /* Try to work around an occasional ALSA buffer underflow issue when the
-         * period size is NPOT due to ALSA resampling by forcing the buffer size. */
-        if (!SDL_getenv("SDL_AUDIO_ALSA_SET_BUFFER_SIZE"))
-            SDL_setenv("SDL_AUDIO_ALSA_SET_BUFFER_SIZE", "1", 1);
-    }
-    if (display_disable)
-        flags &= ~SDL_INIT_VIDEO;
+
+    /* Try to work around an occasional ALSA buffer underflow issue when the
+     * period size is NPOT due to ALSA resampling by forcing the buffer size. */
+    if (!SDL_getenv("SDL_AUDIO_ALSA_SET_BUFFER_SIZE"))
+        SDL_setenv("SDL_AUDIO_ALSA_SET_BUFFER_SIZE", "1", 1);
+
     if (SDL_Init(flags))
     {
         av_log(NULL, AV_LOG_FATAL, "Could not initialize SDL - %s\n", SDL_GetError());
@@ -2927,39 +2843,36 @@ int main(int argc, char **argv)
     SDL_EventState(SDL_SYSWMEVENT, SDL_IGNORE);
     SDL_EventState(SDL_USEREVENT, SDL_IGNORE);
 
-    if (!display_disable)
-    {
-        int flags = SDL_WINDOW_HIDDEN;
-        flags |= SDL_WINDOW_RESIZABLE;
+    flags = SDL_WINDOW_HIDDEN;
+    flags |= SDL_WINDOW_RESIZABLE;
 
 #ifdef SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR
-        SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
+    SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
 #endif
 
-        window = SDL_CreateWindow(program_name, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, default_width, default_height, flags);
-        SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
-        if (window)
+    window = SDL_CreateWindow(program_name, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, default_width, default_height, flags);
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
+    if (window)
+    {
+        renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+        if (!renderer)
         {
-            renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-            if (!renderer)
-            {
-                av_log(NULL, AV_LOG_WARNING, "Failed to initialize a hardware accelerated renderer: %s\n", SDL_GetError());
-                renderer = SDL_CreateRenderer(window, -1, 0);
-            }
-            if (renderer)
-            {
-                if (!SDL_GetRendererInfo(renderer, &renderer_info))
-                    av_log(NULL, AV_LOG_VERBOSE, "Initialized %s renderer.\n", renderer_info.name);
-            }
+            av_log(NULL, AV_LOG_WARNING, "Failed to initialize a hardware accelerated renderer: %s\n", SDL_GetError());
+            renderer = SDL_CreateRenderer(window, -1, 0);
         }
-        if (!window || !renderer || !renderer_info.num_texture_formats)
+        if (renderer)
         {
-            av_log(NULL, AV_LOG_FATAL, "Failed to create window or renderer: %s", SDL_GetError());
-            do_exit(NULL);
+            if (!SDL_GetRendererInfo(renderer, &renderer_info))
+                av_log(NULL, AV_LOG_VERBOSE, "Initialized %s renderer.\n", renderer_info.name);
         }
     }
+    if (!window || !renderer || !renderer_info.num_texture_formats)
+    {
+        av_log(NULL, AV_LOG_FATAL, "Failed to create window or renderer: %s", SDL_GetError());
+        do_exit(NULL);
+    }
 
-    is = stream_open(input_filename, file_iformat);
+    is = stream_open(input_filename);
     if (!is)
     {
         av_log(NULL, AV_LOG_FATAL, "Failed to initialize VideoState!\n");
