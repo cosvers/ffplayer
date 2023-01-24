@@ -53,6 +53,9 @@
 #include <SDL2/SDL_thread.h>
 
 #include "cmdutils.h"
+#include "event_queue.h"
+
+static EventHeader *handle = NULL;
 
 const char program_name[] = "ffplay";
 const int program_birth_year = 2003;
@@ -294,7 +297,7 @@ static int decoder_reorder_pts = -1;
 static int framedrop = -1;
 static int infinite_buffer = -1;
 static int find_stream_info = 1;
-static int show_status = -1;
+static int show_status = 0;
 
 /* current context */
 static int64_t audio_callback_time;
@@ -1061,10 +1064,16 @@ static void stream_close(VideoState *is)
 
 static void do_exit(VideoState *is)
 {
+    if (handle != NULL)
+    {
+        EventQueue.destroy(handle);
+    }
+
     if (is)
     {
         stream_close(is);
     }
+
     if (renderer)
         SDL_DestroyRenderer(renderer);
     if (window)
@@ -1075,12 +1084,6 @@ static void do_exit(VideoState *is)
         printf("\n");
     SDL_Quit();
     av_log(NULL, AV_LOG_QUIET, "%s", "");
-    exit(0);
-}
-
-static void sigterm_handler(int sig)
-{
-    exit(123);
 }
 
 static void set_default_window_size(int width, int height, AVRational sar)
@@ -1634,26 +1637,6 @@ the_end:
     return 0;
 }
 
-/* copy samples for viewing in editor window */
-static void update_sample_display(VideoState *is, short *samples, int samples_size)
-{
-    int size, len;
-
-    size = samples_size / sizeof(short);
-    while (size > 0)
-    {
-        len = SAMPLE_ARRAY_SIZE - is->sample_array_index;
-        if (len > size)
-            len = size;
-        memcpy(is->sample_array + is->sample_array_index, samples, len * sizeof(short));
-        samples += len;
-        is->sample_array_index += len;
-        if (is->sample_array_index >= SAMPLE_ARRAY_SIZE)
-            is->sample_array_index = 0;
-        size -= len;
-    }
-}
-
 /* return the wanted number of samples to get better sync if sync_type is video
  * or external master clock */
 static int synchronize_audio(VideoState *is, int nb_samples)
@@ -2101,7 +2084,7 @@ static int stream_has_enough_packets(AVStream *st, int stream_id, PacketQueue *q
     return stream_id < 0 ||
            queue->abort_request ||
            (st->disposition & AV_DISPOSITION_ATTACHED_PIC) ||
-           queue->nb_packets > MIN_FRAMES && (!queue->duration || av_q2d(st->time_base) * queue->duration > 1.0);
+           (queue->nb_packets > MIN_FRAMES && (!queue->duration || (av_q2d(st->time_base) * queue->duration > 1.0)));
 }
 
 static int is_realtime(AVFormatContext *s)
@@ -2122,11 +2105,9 @@ static int read_thread(void *arg)
     int err, i, ret;
     int st_index[AVMEDIA_TYPE_NB];
     AVPacket *pkt = NULL;
-    int64_t stream_start_time;
     const AVDictionaryEntry *t;
     SDL_mutex *wait_mutex = SDL_CreateMutex();
     int scan_all_pmts_set = 0;
-    int64_t pkt_ts;
 
     if (!wait_mutex)
     {
@@ -2391,9 +2372,6 @@ static int read_thread(void *arg)
         {
             is->eof = 0;
         }
-        /* check if packet is in play range specified by user, then queue, otherwise discard */
-        stream_start_time = ic->streams[pkt->stream_index]->start_time;
-        pkt_ts = pkt->pts == AV_NOPTS_VALUE ? pkt->dts : pkt->pts;
 
         if (pkt->stream_index == is->audio_stream)
         {
@@ -2482,88 +2460,11 @@ static VideoState *stream_open(const char *filename)
     return is;
 }
 
-static void stream_cycle_channel(VideoState *is, int codec_type)
-{
-    AVFormatContext *ic = is->ic;
-    int start_index, stream_index;
-    int old_index;
-    AVStream *st;
-    AVProgram *p = NULL;
-    int nb_streams = is->ic->nb_streams;
-
-    if (codec_type == AVMEDIA_TYPE_VIDEO)
-    {
-        start_index = is->last_video_stream;
-        old_index = is->video_stream;
-    }
-    else if (codec_type == AVMEDIA_TYPE_AUDIO)
-    {
-        start_index = is->last_audio_stream;
-        old_index = is->audio_stream;
-    }
-
-    stream_index = start_index;
-
-    if (codec_type != AVMEDIA_TYPE_VIDEO && is->video_stream != -1)
-    {
-        p = av_find_program_from_stream(ic, NULL, is->video_stream);
-        if (p)
-        {
-            nb_streams = p->nb_stream_indexes;
-            for (start_index = 0; start_index < nb_streams; start_index++)
-                if (p->stream_index[start_index] == stream_index)
-                    break;
-            if (start_index == nb_streams)
-                start_index = -1;
-            stream_index = start_index;
-        }
-    }
-
-    for (;;)
-    {
-        if (++stream_index >= nb_streams)
-        {
-            if (start_index == -1)
-                return;
-            stream_index = 0;
-        }
-        if (stream_index == start_index)
-            return;
-        st = is->ic->streams[p ? p->stream_index[stream_index] : stream_index];
-        if (st->codecpar->codec_type == codec_type)
-        {
-            /* check that parameters are OK */
-            switch (codec_type)
-            {
-            case AVMEDIA_TYPE_AUDIO:
-                if (st->codecpar->sample_rate != 0 &&
-                    st->codecpar->channels != 0)
-                    goto the_end;
-                break;
-            case AVMEDIA_TYPE_VIDEO:
-                goto the_end;
-            default:
-                break;
-            }
-        }
-    }
-the_end:
-    if (p && stream_index != -1)
-        stream_index = p->stream_index[stream_index];
-    av_log(NULL, AV_LOG_INFO, "Switch %s stream from #%d to #%d\n",
-           av_get_media_type_string(codec_type),
-           old_index,
-           stream_index);
-
-    stream_component_close(is, old_index);
-    stream_component_open(is, stream_index);
-}
-
 static void refresh_loop_wait_event(VideoState *is, SDL_Event *event)
 {
     double remaining_time = 0.0;
     SDL_PumpEvents();
-    while (!SDL_PeepEvents(event, 1, SDL_GETEVENT, SDL_FIRSTEVENT, SDL_LASTEVENT))
+    while (!SDL_PeepEvents(event, 1, SDL_GETEVENT, SDL_FIRSTEVENT, SDL_LASTEVENT) && EventQueue.isEmpty(handle))
     {
         if (remaining_time > 0.0)
             av_usleep((int64_t)(remaining_time * 1000000.0));
@@ -2602,16 +2503,47 @@ static void seek_chapter(VideoState *is, int incr)
     stream_seek(is, av_rescale_q(is->ic->chapters[i]->start, is->ic->chapters[i]->time_base, AV_TIME_BASE_Q), 0, 0);
 }
 
-/* handle an event sent by the GUI */
+static FFEVENT get_event()
+{
+    int event = -1;
+
+    if (handle != NULL)
+    {
+        return EventQueue.pop(handle);
+    }
+
+    return event;
+}
+
 static void event_loop(VideoState *cur_stream)
 {
     SDL_Event event;
+    FFEVENT ffevent;
+    int quit = 0;
     double incr, pos, frac;
 
-    for (;;)
+    while (!quit)
     {
         double x;
+
         refresh_loop_wait_event(cur_stream, &event);
+        ffevent = get_event();
+
+        switch (ffevent)
+        {
+        case FFEVENT_PLAY_PAUSE:
+            toggle_pause(cur_stream);
+            break;
+
+        case FFEVENT_CLOSE:
+            do_exit(cur_stream);
+            quit = 1;
+            break;
+
+        default:
+            break;
+        }
+
         switch (event.type)
         {
         case SDL_KEYDOWN:
@@ -2642,16 +2574,6 @@ static void event_loop(VideoState *cur_stream)
                 break;
             case SDLK_s: // S: Step to next frame
                 step_to_next_frame(cur_stream);
-                break;
-            case SDLK_a:
-                stream_cycle_channel(cur_stream, AVMEDIA_TYPE_AUDIO);
-                break;
-            case SDLK_v:
-                stream_cycle_channel(cur_stream, AVMEDIA_TYPE_VIDEO);
-                break;
-            case SDLK_c:
-                stream_cycle_channel(cur_stream, AVMEDIA_TYPE_VIDEO);
-                stream_cycle_channel(cur_stream, AVMEDIA_TYPE_AUDIO);
                 break;
             case SDLK_PAGEUP:
                 if (cur_stream->ic->nb_chapters <= 1)
@@ -2778,20 +2700,6 @@ static void event_loop(VideoState *cur_stream)
     }
 }
 
-static void opt_input_file(void *optctx, const char *filename)
-{
-    if (input_filename)
-    {
-        av_log(NULL, AV_LOG_FATAL,
-               "Argument '%s' provided as input filename, but '%s' was already specified.\n",
-               filename, input_filename);
-        exit(1);
-    }
-    if (!strcmp(filename, "-"))
-        filename = "pipe:";
-    input_filename = filename;
-}
-
 static const OptionDef options[] = {
     CMDUTILS_COMMON_OPTIONS{"lowres", OPT_INT | HAS_ARG | OPT_EXPERT, {&lowres}, "", ""},
     {"framedrop", OPT_BOOL | OPT_EXPERT, {&framedrop}, "drop frames when cpu is too slow", ""},
@@ -2826,11 +2734,12 @@ void show_help_default(const char *opt, const char *arg)
            "left double-click   toggle full screen\n");
 }
 
-/* Called from the main */
-int main(int argc, char **argv)
+void ffplayer_open(char *input_filename)
 {
     int flags;
     VideoState *is;
+
+    handle = EventQueue.create();
 
     av_log_set_flags(AV_LOG_SKIP_REPEATED);
 
@@ -2840,17 +2749,12 @@ int main(int argc, char **argv)
 #endif
     avformat_network_init();
 
-    signal(SIGINT, sigterm_handler);  /* Interrupt (ANSI).    */
-    signal(SIGTERM, sigterm_handler); /* Termination (ANSI).  */
-
-    parse_options(NULL, argc, argv, options, opt_input_file);
-
     if (!input_filename)
     {
         av_log(NULL, AV_LOG_FATAL, "An input file must be specified\n");
         av_log(NULL, AV_LOG_FATAL,
                "Use -h to get full help or, even better, run 'man %s'\n", program_name);
-        exit(1);
+        return;
     }
 
     flags = SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_TIMER;
@@ -2864,7 +2768,7 @@ int main(int argc, char **argv)
     {
         av_log(NULL, AV_LOG_FATAL, "Could not initialize SDL - %s\n", SDL_GetError());
         av_log(NULL, AV_LOG_FATAL, "(Did you set the DISPLAY variable?)\n");
-        exit(1);
+        return;
     }
 
     SDL_EventState(SDL_SYSWMEVENT, SDL_IGNORE);
@@ -2907,8 +2811,48 @@ int main(int argc, char **argv)
     }
 
     event_loop(is);
+}
 
-    /* never returns */
+int ffplayer_play_or_pause()
+{
+    if (handle == NULL)
+        return -1;
 
+    EventQueue.push(handle, FFEVENT_PLAY_PAUSE);
+
+    return 0;
+}
+
+int ffplayer_seek(int value, int forward, int fast)
+{
+    if (handle == NULL)
+        return -1;
+
+    if (forward)
+    {
+        fast ? EventQueue.push(handle, FFEVENT_SEEK_F_F) : EventQueue.push(handle, FFEVENT_SEEK_F);
+    }
+    else
+    {
+        fast ? EventQueue.push(handle, FFEVENT_SEEK_F_B) : EventQueue.push(handle, FFEVENT_SEEK_B);
+    }
+
+    return 0;
+}
+
+int ffplayer_next_frame(void *data)
+{
+    if (handle == NULL)
+        return -1;
+
+    return 0;
+}
+
+int ffplayer_close()
+{
+    if (handle == NULL)
+        return -1;
+
+    EventQueue.push(handle, FFEVENT_CLOSE);
     return 0;
 }
