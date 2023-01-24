@@ -289,13 +289,12 @@ static int seek_by_bytes = -1;
 static float seek_interval = 10; // in seconds
 static int startup_volume = 100;
 static int av_sync_type = AV_SYNC_AUDIO_MASTER;
-static int64_t start_time = AV_NOPTS_VALUE;
-static int64_t duration = AV_NOPTS_VALUE;
 static int lowres = 0;
 static int decoder_reorder_pts = -1;
 static int framedrop = -1;
 static int infinite_buffer = -1;
 static int find_stream_info = 1;
+static int show_status = -1;
 
 /* current context */
 static int64_t audio_callback_time;
@@ -1072,6 +1071,8 @@ static void do_exit(VideoState *is)
         SDL_DestroyWindow(window);
     uninit_opts();
     avformat_network_deinit();
+    if (show_status)
+        printf("\n");
     SDL_Quit();
     av_log(NULL, AV_LOG_QUIET, "%s", "");
     exit(0);
@@ -1433,7 +1434,52 @@ static void video_refresh(void *opaque, double *remaining_time)
         if (is->force_refresh && is->pictq.rindex_shown)
             video_display(is);
     }
+
     is->force_refresh = 0;
+
+    if (show_status)
+    {
+        AVBPrint buf;
+        static int64_t last_time;
+        int64_t cur_time;
+        int aqsize, vqsize;
+        double av_diff;
+        cur_time = av_gettime_relative();
+        if (!last_time || (cur_time - last_time) >= 30000)
+        {
+            aqsize = 0;
+            vqsize = 0;
+            if (is->audio_st)
+                aqsize = is->audioq.size;
+            if (is->video_st)
+                vqsize = is->videoq.size;
+            av_diff = 0;
+            if (is->audio_st && is->video_st)
+                av_diff = get_clock(&is->audclk) - get_clock(&is->vidclk);
+            else if (is->video_st)
+                av_diff = get_master_clock(is) - get_clock(&is->vidclk);
+            else if (is->audio_st)
+                av_diff = get_master_clock(is) - get_clock(&is->audclk);
+            av_bprint_init(&buf, 0, AV_BPRINT_SIZE_AUTOMATIC);
+            av_bprintf(&buf,
+                       "%7.2f %s:%7.3f fd=%4d aq=%5dKB vq=%5dKB f=%" PRId64 "/%" PRId64 "   \r",
+                       get_master_clock(is),
+                       (is->audio_st && is->video_st) ? "A-V" : (is->video_st ? "M-V" : (is->audio_st ? "M-A" : "   ")),
+                       av_diff,
+                       is->frame_drops_early + is->frame_drops_late,
+                       aqsize / 1024,
+                       vqsize / 1024,
+                       is->video_st ? is->viddec.avctx->pts_correction_num_faulty_dts : 0,
+                       is->video_st ? is->viddec.avctx->pts_correction_num_faulty_pts : 0);
+            if (show_status == 1 && AV_LOG_INFO > av_log_get_level())
+                fprintf(stderr, "%s", buf.str);
+            else
+                av_log(NULL, AV_LOG_INFO, "%s", buf.str);
+            fflush(stderr);
+            av_bprint_finalize(&buf, NULL);
+            last_time = cur_time;
+        }
+    }
 }
 
 static int queue_picture(VideoState *is, AVFrame *src_frame, double pts, double duration, int64_t pos, int serial)
@@ -2077,7 +2123,6 @@ static int read_thread(void *arg)
     int st_index[AVMEDIA_TYPE_NB];
     AVPacket *pkt = NULL;
     int64_t stream_start_time;
-    int pkt_in_play_range = 0;
     const AVDictionaryEntry *t;
     SDL_mutex *wait_mutex = SDL_CreateMutex();
     int scan_all_pmts_set = 0;
@@ -2162,24 +2207,10 @@ static int read_thread(void *arg)
 
     is->max_frame_duration = (ic->iformat->flags & AVFMT_TS_DISCONT) ? 10.0 : 3600.0;
 
-    /* if seeking requested, we execute it */
-    if (start_time != AV_NOPTS_VALUE)
-    {
-        int64_t timestamp;
-
-        timestamp = start_time;
-        /* add the stream start time */
-        if (ic->start_time != AV_NOPTS_VALUE)
-            timestamp += ic->start_time;
-        ret = avformat_seek_file(ic, -1, INT64_MIN, timestamp, INT64_MAX, 0);
-        if (ret < 0)
-        {
-            av_log(NULL, AV_LOG_WARNING, "%s: could not seek to position %0.3f\n",
-                   is->filename, (double)timestamp / AV_TIME_BASE);
-        }
-    }
-
     is->realtime = is_realtime(ic);
+
+    if (show_status)
+        av_dump_format(ic, 0, is->filename, 0);
 
     for (i = 0; i < ic->nb_streams; i++)
     {
@@ -2334,7 +2365,7 @@ static int read_thread(void *arg)
             (!is->video_st || (is->viddec.finished == is->videoq.serial && frame_queue_nb_remaining(&is->pictq) == 0)))
         {
             // stream ended - seek to beginning
-            // stream_seek(is, start_time != AV_NOPTS_VALUE ? start_time : 0, 0, 0);
+            // stream_seek(is, 0, 0, 0);
         }
         ret = av_read_frame(ic, pkt);
         if (ret < 0)
@@ -2363,16 +2394,12 @@ static int read_thread(void *arg)
         /* check if packet is in play range specified by user, then queue, otherwise discard */
         stream_start_time = ic->streams[pkt->stream_index]->start_time;
         pkt_ts = pkt->pts == AV_NOPTS_VALUE ? pkt->dts : pkt->pts;
-        pkt_in_play_range = duration == AV_NOPTS_VALUE ||
-                            (pkt_ts - (stream_start_time != AV_NOPTS_VALUE ? stream_start_time : 0)) *
-                                        av_q2d(ic->streams[pkt->stream_index]->time_base) -
-                                    (double)(start_time != AV_NOPTS_VALUE ? start_time : 0) / 1000000 <=
-                                ((double)duration / 1000000);
-        if (pkt->stream_index == is->audio_stream && pkt_in_play_range)
+
+        if (pkt->stream_index == is->audio_stream)
         {
             packet_queue_put(&is->audioq, pkt);
         }
-        else if (pkt->stream_index == is->video_stream && pkt_in_play_range && !(is->video_st->disposition & AV_DISPOSITION_ATTACHED_PIC))
+        else if (pkt->stream_index == is->video_stream && !(is->video_st->disposition & AV_DISPOSITION_ATTACHED_PIC))
         {
             packet_queue_put(&is->videoq, pkt);
         }

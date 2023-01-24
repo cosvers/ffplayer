@@ -1,5 +1,6 @@
 {
     "files.associations": {
-        "cmdutils.h": "c"
+        "cmdutils.h": "c",
+        "config.h": "c"
     }
 }
