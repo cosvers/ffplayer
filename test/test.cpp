@@ -22,6 +22,14 @@ int main()
             ffplayer_play_or_pause();
             break;
 
+        case 4:
+            ffplayer_fast_seek(0);
+            break;
+
+        case 6:
+            ffplayer_fast_seek(1);
+            break;
+
         case 0:
             ffplayer_close();
             break;

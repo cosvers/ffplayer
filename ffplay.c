@@ -246,7 +246,6 @@ typedef struct VideoState
     int audio_buf_index; /* in bytes */
     int audio_write_buf_size;
     int audio_volume;
-    int muted;
     struct AudioParams audio_src;
     struct AudioParams audio_tgt;
     struct SwrContext *swr_ctx;
@@ -285,12 +284,9 @@ typedef struct VideoState
 static const char *input_filename;
 static int default_width = 640;
 static int default_height = 480;
-static int screen_width = 0;
-static int screen_height = 0;
 static const char *wanted_stream_spec[AVMEDIA_TYPE_NB] = {0};
 static int seek_by_bytes = -1;
 static float seek_interval = 10; // in seconds
-static int startup_volume = 100;
 static int av_sync_type = AV_SYNC_AUDIO_MASTER;
 static int lowres = 0;
 static int decoder_reorder_pts = -1;
@@ -1089,8 +1085,8 @@ static void do_exit(VideoState *is)
 static void set_default_window_size(int width, int height, AVRational sar)
 {
     SDL_Rect rect;
-    int max_width = screen_width ? screen_width : INT_MAX;
-    int max_height = screen_height ? screen_height : INT_MAX;
+    int max_width = INT_MAX;
+    int max_height = INT_MAX;
     if (max_width == INT_MAX && max_height == INT_MAX)
         max_height = height;
     calculate_display_rect(&rect, 0, 0, max_width, max_height, width, height, sar);
@@ -1102,8 +1098,8 @@ static int video_open(VideoState *is)
 {
     int w, h;
 
-    w = screen_width ? screen_width : default_width;
-    h = screen_height ? screen_height : default_height;
+    w = default_width;
+    h = default_height;
 
     SDL_SetWindowTitle(window, input_filename);
 
@@ -1278,18 +1274,6 @@ static void toggle_pause(VideoState *is)
 {
     stream_toggle_pause(is);
     is->step = 0;
-}
-
-static void toggle_mute(VideoState *is)
-{
-    is->muted = !is->muted;
-}
-
-static void update_volume(VideoState *is, int sign, double step)
-{
-    double volume_level = is->audio_volume ? (20 * log(is->audio_volume / (double)SDL_MIX_MAXVOLUME) / log(10)) : -1000.0;
-    int new_volume = lrint(SDL_MIX_MAXVOLUME * pow(10.0, (volume_level + sign * step) / 20.0));
-    is->audio_volume = av_clip(is->audio_volume == new_volume ? (is->audio_volume + sign) : new_volume, 0, SDL_MIX_MAXVOLUME);
 }
 
 static void step_to_next_frame(VideoState *is)
@@ -1838,12 +1822,12 @@ static void sdl_audio_callback(void *opaque, Uint8 *stream, int len)
         len1 = is->audio_buf_size - is->audio_buf_index;
         if (len1 > len)
             len1 = len;
-        if (!is->muted && is->audio_buf && is->audio_volume == SDL_MIX_MAXVOLUME)
+        if (is->audio_buf && is->audio_volume == SDL_MIX_MAXVOLUME)
             memcpy(stream, (uint8_t *)is->audio_buf + is->audio_buf_index, len1);
         else
         {
             memset(stream, 0, len1);
-            if (!is->muted && is->audio_buf)
+            if (is->audio_buf)
                 SDL_MixAudioFormat(stream, (uint8_t *)is->audio_buf + is->audio_buf_index, AUDIO_S16SYS, len1, is->audio_volume);
         }
         len -= len1;
@@ -2440,14 +2424,7 @@ static VideoState *stream_open(const char *filename)
     init_clock(&is->audclk, &is->audioq.serial);
     init_clock(&is->extclk, &is->extclk.serial);
     is->audio_clock_serial = -1;
-    if (startup_volume < 0)
-        av_log(NULL, AV_LOG_WARNING, "-volume=%d < 0, setting to 0\n", startup_volume);
-    if (startup_volume > 100)
-        av_log(NULL, AV_LOG_WARNING, "-volume=%d > 100, setting to 100\n", startup_volume);
-    startup_volume = av_clip(startup_volume, 0, 100);
-    startup_volume = av_clip(SDL_MIX_MAXVOLUME * startup_volume / 100, 0, SDL_MIX_MAXVOLUME);
-    is->audio_volume = startup_volume;
-    is->muted = 0;
+    is->audio_volume = av_clip(SDL_MIX_MAXVOLUME * 50 / 100, 0, SDL_MIX_MAXVOLUME);
     is->av_sync_type = av_sync_type;
     is->read_tid = SDL_CreateThread(read_thread, "read_thread", is);
     if (!is->read_tid)
@@ -2473,34 +2450,6 @@ static void refresh_loop_wait_event(VideoState *is, SDL_Event *event)
             video_refresh(is, &remaining_time);
         SDL_PumpEvents();
     }
-}
-
-static void seek_chapter(VideoState *is, int incr)
-{
-    int64_t pos = get_master_clock(is) * AV_TIME_BASE;
-    int i;
-
-    if (!is->ic->nb_chapters)
-        return;
-
-    /* find the current chapter */
-    for (i = 0; i < is->ic->nb_chapters; i++)
-    {
-        AVChapter *ch = is->ic->chapters[i];
-        if (av_compare_ts(pos, AV_TIME_BASE_Q, ch->start, ch->time_base) < 0)
-        {
-            i--;
-            break;
-        }
-    }
-
-    i += incr;
-    i = FFMAX(i, 0);
-    if (i >= is->ic->nb_chapters)
-        return;
-
-    av_log(NULL, AV_LOG_VERBOSE, "Seeking to chapter %d.\n", i);
-    stream_seek(is, av_rescale_q(is->ic->chapters[i]->start, is->ic->chapters[i]->time_base, AV_TIME_BASE_Q), 0, 0);
 }
 
 static FFEVENT get_event()
@@ -2529,6 +2478,10 @@ static void event_loop(VideoState *cur_stream)
         refresh_loop_wait_event(cur_stream, &event);
         ffevent = get_event();
 
+        // TODO: Check if read_thread is still initializing...
+        // if (!isInitialized)
+        // continue;
+
         switch (ffevent)
         {
         case FFEVENT_PLAY_PAUSE:
@@ -2540,113 +2493,44 @@ static void event_loop(VideoState *cur_stream)
             quit = 1;
             break;
 
-        default:
-            break;
-        }
+        case FFEVENT_SEEK_F:
+            incr = seek_interval;
+            goto do_seek;
 
-        switch (event.type)
-        {
-        case SDL_KEYDOWN:
-            if (event.key.keysym.sym == SDLK_ESCAPE || event.key.keysym.sym == SDLK_q)
+        case FFEVENT_SEEK_B:
+            incr = -seek_interval;
+        do_seek:
+            if (seek_by_bytes)
             {
-                do_exit(cur_stream);
-                break;
-            }
-            // If we don't yet have a window, skip all key events, because read_thread might still be initializing...
-            if (!cur_stream->width)
-                continue;
-            switch (event.key.keysym.sym)
-            {
-            case SDLK_p:
-            case SDLK_SPACE:
-                toggle_pause(cur_stream);
-                break;
-            case SDLK_m:
-                toggle_mute(cur_stream);
-                break;
-            case SDLK_KP_MULTIPLY:
-            case SDLK_0:
-                update_volume(cur_stream, 1, SDL_VOLUME_STEP);
-                break;
-            case SDLK_KP_DIVIDE:
-            case SDLK_9:
-                update_volume(cur_stream, -1, SDL_VOLUME_STEP);
-                break;
-            case SDLK_s: // S: Step to next frame
-                step_to_next_frame(cur_stream);
-                break;
-            case SDLK_PAGEUP:
-                if (cur_stream->ic->nb_chapters <= 1)
-                {
-                    incr = 600.0;
-                    goto do_seek;
-                }
-                seek_chapter(cur_stream, 1);
-                break;
-            case SDLK_PAGEDOWN:
-                if (cur_stream->ic->nb_chapters <= 1)
-                {
-                    incr = -600.0;
-                    goto do_seek;
-                }
-                seek_chapter(cur_stream, -1);
-                break;
-            case SDLK_LEFT:
-                incr = seek_interval ? -seek_interval : -10.0;
-                goto do_seek;
-            case SDLK_RIGHT:
-                incr = seek_interval ? seek_interval : 10.0;
-                goto do_seek;
-            case SDLK_UP:
-                incr = 60.0;
-                goto do_seek;
-            case SDLK_DOWN:
-                incr = -60.0;
-            do_seek:
-                if (seek_by_bytes)
-                {
-                    pos = -1;
-                    if (pos < 0 && cur_stream->video_stream >= 0)
-                        pos = frame_queue_last_pos(&cur_stream->pictq);
-                    if (pos < 0 && cur_stream->audio_stream >= 0)
-                        pos = frame_queue_last_pos(&cur_stream->sampq);
-                    if (pos < 0)
-                        pos = avio_tell(cur_stream->ic->pb);
-                    if (cur_stream->ic->bit_rate)
-                        incr *= cur_stream->ic->bit_rate / 8.0;
-                    else
-                        incr *= 180000.0;
-                    pos += incr;
-                    stream_seek(cur_stream, pos, incr, 1);
-                }
+                pos = -1;
+                if (pos < 0 && cur_stream->video_stream >= 0)
+                    pos = frame_queue_last_pos(&cur_stream->pictq);
+                if (pos < 0 && cur_stream->audio_stream >= 0)
+                    pos = frame_queue_last_pos(&cur_stream->sampq);
+                if (pos < 0)
+                    pos = avio_tell(cur_stream->ic->pb);
+                if (cur_stream->ic->bit_rate)
+                    incr *= cur_stream->ic->bit_rate / 8.0;
                 else
-                {
-                    pos = get_master_clock(cur_stream);
-                    if (isnan(pos))
-                        pos = (double)cur_stream->seek_pos / AV_TIME_BASE;
-                    pos += incr;
-                    if (cur_stream->ic->start_time != AV_NOPTS_VALUE && pos < cur_stream->ic->start_time / (double)AV_TIME_BASE)
-                        pos = cur_stream->ic->start_time / (double)AV_TIME_BASE;
-                    stream_seek(cur_stream, (int64_t)(pos * AV_TIME_BASE), (int64_t)(incr * AV_TIME_BASE), 0);
-                }
-                break;
-            default:
-                break;
-            }
-            break;
-        case SDL_MOUSEMOTION:
-            if (event.type == SDL_MOUSEBUTTONDOWN)
-            {
-                if (event.button.button != SDL_BUTTON_RIGHT)
-                    break;
-                x = event.button.x;
+                    incr *= 180000.0;
+                pos += incr;
+                stream_seek(cur_stream, pos, incr, 1);
             }
             else
             {
-                if (!(event.motion.state & SDL_BUTTON_RMASK))
-                    break;
-                x = event.motion.x;
+                pos = get_master_clock(cur_stream);
+                if (isnan(pos))
+                    pos = (double)cur_stream->seek_pos / AV_TIME_BASE;
+                pos += incr;
+                if (cur_stream->ic->start_time != AV_NOPTS_VALUE && pos < cur_stream->ic->start_time / (double)AV_TIME_BASE)
+                    pos = cur_stream->ic->start_time / (double)AV_TIME_BASE;
+                stream_seek(cur_stream, (int64_t)(pos * AV_TIME_BASE), (int64_t)(incr * AV_TIME_BASE), 0);
             }
+            break;
+
+        // TODO: seek based on UI seek bar
+        case FFEVENT_SEEK:
+            x = 0; // seek value from user
             if (seek_by_bytes || cur_stream->ic->duration <= 0)
             {
                 uint64_t size = avio_size(cur_stream->ic->pb);
@@ -2675,25 +2559,26 @@ static void event_loop(VideoState *cur_stream)
                 stream_seek(cur_stream, ts, 0, 0);
             }
             break;
-        case SDL_WINDOWEVENT:
-            switch (event.window.event)
+
+        default:
+            break;
+        }
+
+        switch (event.type)
+        {
+        case SDL_KEYDOWN:
+            if (event.key.keysym.sym == SDLK_ESCAPE || event.key.keysym.sym == SDLK_q)
             {
-            case SDL_WINDOWEVENT_SIZE_CHANGED:
-                screen_width = cur_stream->width = event.window.data1;
-                screen_height = cur_stream->height = event.window.data2;
-                if (cur_stream->vis_texture)
-                {
-                    SDL_DestroyTexture(cur_stream->vis_texture);
-                    cur_stream->vis_texture = NULL;
-                }
-            case SDL_WINDOWEVENT_EXPOSED:
-                cur_stream->force_refresh = 1;
+                do_exit(cur_stream);
+                break;
             }
             break;
+
         case SDL_QUIT:
         case FF_QUIT_EVENT:
             do_exit(cur_stream);
             break;
+
         default:
             break;
         }
@@ -2707,32 +2592,6 @@ static const OptionDef options[] = {
         NULL,
     },
 };
-
-void show_help_default(const char *opt, const char *arg)
-{
-    av_log_set_callback(log_callback_help);
-    show_help_options(options, "Main options:", 0, OPT_EXPERT, 0);
-    show_help_options(options, "Advanced options:", OPT_EXPERT, 0, 0);
-    printf("\n");
-    show_help_children(avcodec_get_class(), AV_OPT_FLAG_DECODING_PARAM);
-    show_help_children(avformat_get_class(), AV_OPT_FLAG_DECODING_PARAM);
-    show_help_children(sws_get_class(), AV_OPT_FLAG_ENCODING_PARAM);
-    printf("\nWhile playing:\n"
-           "q, ESC              quit\n"
-           "p, SPC              pause\n"
-           "m                   toggle mute\n"
-           "9, 0                decrease and increase volume respectively\n"
-           "/, *                decrease and increase volume respectively\n"
-           "a                   cycle audio channel in the current program\n"
-           "v                   cycle video channel\n"
-           "c                   cycle program\n"
-           "s                   activate frame-step mode\n"
-           "left/right          seek backward/forward 10 seconds or to custom interval if -seek_interval is set\n"
-           "down/up             seek backward/forward 1 minute\n"
-           "page down/page up   seek backward/forward 10 minutes\n"
-           "right mouse click   seek to percentage in file corresponding to fraction of width\n"
-           "left double-click   toggle full screen\n");
-}
 
 void ffplayer_open(char *input_filename)
 {
@@ -2823,18 +2682,28 @@ int ffplayer_play_or_pause()
     return 0;
 }
 
-int ffplayer_seek(int value, int forward, int fast)
+int ffplayer_seek(int value)
+{
+    if (handle == NULL)
+        return -1;
+
+    EventQueue.push(handle, FFEVENT_SEEK);
+
+    return 0;
+}
+
+int ffplayer_fast_seek(int forward)
 {
     if (handle == NULL)
         return -1;
 
     if (forward)
     {
-        fast ? EventQueue.push(handle, FFEVENT_SEEK_F_F) : EventQueue.push(handle, FFEVENT_SEEK_F);
+        EventQueue.push(handle, FFEVENT_SEEK_F);
     }
     else
     {
-        fast ? EventQueue.push(handle, FFEVENT_SEEK_F_B) : EventQueue.push(handle, FFEVENT_SEEK_B);
+        EventQueue.push(handle, FFEVENT_SEEK_B);
     }
 
     return 0;
