@@ -27,6 +27,7 @@ int main()
         case 5:
             ffplayer_play_or_pause(ctx1);
             break;
+
         case 3:
             ffplayer_play_or_pause(ctx2);
             break;
