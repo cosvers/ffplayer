@@ -5,7 +5,7 @@ RM = rm
 OUTPUT = test
 INCLUDE = ../
 LIB := -lffplayer -pthread
-CFLAGS := -g3 -std=c++11 
+CPPFLAGS := -g3 -std=c++11 
 SOURCES := $(wildcard *.cpp)
 OBJECTS := $(addprefix obj/,$(notdir) $(SOURCES:.cpp=.o))
 
@@ -16,10 +16,10 @@ makedir:
 	$(MAKEDIR) bin
 
 obj/%.o: %.cpp
-	$(GPP) -I $(INCLUDE) -c -o $@ $< $(CFLAGS)
+	$(GPP) -I $(INCLUDE) -c -o $@ $< $(CPPFLAGS)
 
 bin/$(OUTPUT):
-	$(GPP) -o $@ $(OBJECTS) -L$(INCLUDE) $(LIB) $(CFLAGS)
+	$(GPP) -o $@ $(OBJECTS) $(LIB) $(CPPFLAGS)
 
 clean:
 	$(RM) $(OBJECTS) bin/$(OUTPUT)

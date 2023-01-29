@@ -41,7 +41,9 @@ int main()
 
         case 0:
             ffplayer_close(ctx1);
+            ffplayer_close(ctx2);
             ctx1 = nullptr;
+            ctx2 = nullptr;
             break;
 
         default:
