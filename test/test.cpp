@@ -1,6 +1,6 @@
 extern "C"
 {
-#include "ffplay.h"
+#include <ffplayer.h>
 }
 
 #include <iostream>

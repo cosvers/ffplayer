@@ -51,7 +51,7 @@
 
 #include <SDL2/SDL_thread.h>
 
-#include "ffplay.h"
+#include "ffplayer.h"
 #include "event_queue.h"
 
 const char program_name[] = "ffplay";
