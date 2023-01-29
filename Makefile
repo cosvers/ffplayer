@@ -5,10 +5,12 @@ GCC = gcc
 MAKEDIR = mkdir -p
 RM = rm
 
-OBJ_NAME = libffplayer.so
+PROG_NAME = ffplayer
+OBJ_NAME = lib$(PROG_NAME).so
 VERSION = 1
 OUTPUT = $(OBJ_NAME).$(VERSION)
 INSTALL_PATH = /usr/lib
+INCLUDE_PATH = /usr/include
 
 INCLUDE = -I .
 LIB := -lswscale -lavcodec -lavdevice -lavformat -lavutil -lpostproc -lswresample -lavfilter -lSDL2 -lSDL2main
@@ -34,9 +36,10 @@ $(OUTPUT):
 	$(GPP) -shared -o $@ $(OBJECTS) $(C_OBJECTS) $(LIB)
 
 install:
-	mv $(OUTPUT) $(INSTALL_PATH)
+	cp $(OUTPUT) $(INSTALL_PATH)
+	cp $(PROG_NAME).h $(INCLUDE_PATH)
 	cd $(INSTALL_PATH)
-	ln -s $(INSTALL_PATH)/$(OUTPUT) $(INSTALL_PATH)/$(OBJ_NAME)
+	ln -s -f $(INSTALL_PATH)/$(OUTPUT) $(INSTALL_PATH)/$(OBJ_NAME)
 
 clean:
 	$(RM) $(OBJECTS) $(C_OBJECTS) ${OUTPUT}

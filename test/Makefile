@@ -3,7 +3,6 @@ MAKEDIR = mkdir -p
 RM = rm
 
 OUTPUT = test
-INCLUDE = ../
 LIB := -lffplayer -pthread
 CPPFLAGS := -g3 -std=c++11 
 SOURCES := $(wildcard *.cpp)
@@ -16,7 +15,7 @@ makedir:
 	$(MAKEDIR) bin
 
 obj/%.o: %.cpp
-	$(GPP) -I $(INCLUDE) -c -o $@ $< $(CPPFLAGS)
+	$(GPP) -c -o $@ $< $(CPPFLAGS)
 
 bin/$(OUTPUT):
 	$(GPP) -o $@ $(OBJECTS) $(LIB) $(CPPFLAGS)
