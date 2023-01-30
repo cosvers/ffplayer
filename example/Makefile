@@ -2,7 +2,7 @@ GPP = g++
 MAKEDIR = mkdir -p
 RM = rm
 
-OUTPUT = test
+OUTPUT = example
 LIB :=  -lavcodec -lffplayer -pthread
 CPPFLAGS := -g3 -std=c++11 
 SOURCES := $(wildcard *.cpp)
