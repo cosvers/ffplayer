@@ -13,7 +13,7 @@ INSTALL_PATH = /usr/lib
 INCLUDE_PATH = /usr/include
 
 INCLUDE = -I .
-LIB := -lswscale -lavcodec -lavdevice -lavformat -lavutil -lpostproc -lswresample -lavfilter -lSDL2 -lSDL2main
+LIB := -pthread -lavdevice -lavutil
 CPPFLAGS := $(INCLUDE) -g3 -std=c++11 
 CFLAGS := $(INCLUDE) -g3 -std=c11 
 SOURCES := $(wildcard *.cpp)

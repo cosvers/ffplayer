@@ -3,7 +3,7 @@ MAKEDIR = mkdir -p
 RM = rm
 
 OUTPUT = test
-LIB := -lffplayer -pthread
+LIB :=  -lavcodec -lffplayer -pthread
 CPPFLAGS := -g3 -std=c++11 
 SOURCES := $(wildcard *.cpp)
 OBJECTS := $(addprefix obj/,$(notdir) $(SOURCES:.cpp=.o))

@@ -56,6 +56,13 @@
         "thread": "cpp",
         "cinttypes": "cpp",
         "typeinfo": "cpp",
-        "ffplay.h": "c"
+        "ffplayer.h": "c",
+        "opt.h": "c",
+        "mathematics.h": "c",
+        "math.h": "c",
+        "avdevice.h": "c",
+        "limits.h": "c",
+        "time.h": "c",
+        "signal.h": "c"
     }
 }
