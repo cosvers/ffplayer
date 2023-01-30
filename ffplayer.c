@@ -55,6 +55,7 @@ typedef struct PacketQueue
     int nb_packets;
     int size;
     int64_t duration;
+    int initialized;
     int abort_request;
     int serial;
     pthread_mutex_t mutex;
@@ -125,7 +126,7 @@ static int packet_queue_put_private(PacketQueue *q, AVPacket *pkt)
 {
     MyAVPacketList pkt1;
 
-    if (q->abort_request)
+    if (q->abort_request || !q->initialized)
         return -1;
 
     if (av_fifo_space(q->pkt_list) < sizeof(pkt1))
@@ -196,7 +197,7 @@ static int packet_queue_init(PacketQueue *q)
         return AVERROR(ENOMEM);
     }
 
-    q->abort_request = 1;
+    q->initialized = 0;
     return 0;
 }
 
@@ -238,6 +239,7 @@ static void packet_queue_abort(PacketQueue *q)
 static void packet_queue_start(PacketQueue *q)
 {
     pthread_mutex_lock(&q->mutex);
+    q->initialized = 1;
     q->abort_request = 0;
     q->serial++;
     pthread_mutex_unlock(&q->mutex);
@@ -256,6 +258,12 @@ static int packet_queue_get(PacketQueue *q, AVPacket *pkt, int block, int *seria
         if (q->abort_request)
         {
             ret = -1;
+            break;
+        }
+
+        if (!q->initialized)
+        {
+            ret = 0;
             break;
         }
 
@@ -489,7 +497,7 @@ static void step_to_next_frame(VideoState *is)
 static int stream_has_enough_packets(AVStream *st, int stream_id, PacketQueue *queue)
 {
     // printf("came inside: %d %d %d %d %ld %d\n", stream_id, queue->abort_request, queue->nb_packets, MIN_FRAMES, queue->duration, (av_q2d(st->time_base) * queue->duration > 1.0));
-    return stream_id < 0 ||
+    return stream_id < 0 || !queue->initialized ||
            queue->abort_request ||
            (queue->nb_packets > MIN_FRAMES && (!queue->duration || (av_q2d(st->time_base) * queue->duration > 1.0)));
 }
@@ -1009,9 +1017,7 @@ int ffplayer_get_video_pkt(VideoState *state, AVPacket *pkt)
     if (!state || !state->handle)
         return -1;
 
-    packet_queue_get(&state->videoq, pkt, 1, NULL);
-
-    return 0;
+    return packet_queue_get(&state->videoq, pkt, 1, NULL);
 }
 
 #if AUDIO_ENABLED
@@ -1020,9 +1026,7 @@ int ffplayer_get_audio_pkt(VideoState *state, AVPacket *pkt)
     if (!state || !state->handle)
         return -1;
 
-    packet_queue_get(&state->audioq, pkt, 1, NULL);
-
-    return 0;
+    return packet_queue_get(&state->audioq, pkt, 1, NULL);
 }
 #endif
 
