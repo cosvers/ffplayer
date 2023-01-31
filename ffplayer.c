@@ -30,7 +30,6 @@
 #include <stdint.h>
 #include <pthread.h>
 #include <sys/time.h>
-#include <unistd.h>
 
 #include "libavutil/fifo.h"
 #include "libavutil/time.h"
@@ -42,6 +41,7 @@
 #define MAX_QUEUE_SIZE (15 * 1024 * 1024)
 #define MIN_FRAMES 25
 #define AUDIO_ENABLED 0
+#define REFRESH_RATE 0.01
 
 typedef struct MyAVPacketList
 {
@@ -651,7 +651,7 @@ static void *read_thread(void *arg)
         {
             /* wait 10 ms to avoid trying to get another packet */
             /* XXX: horrible */
-            sleep(10 / 1000);
+            av_usleep(10 * 1000);
             continue;
         }
 #endif
@@ -795,6 +795,10 @@ static VideoState *stream_open(const char *filename)
     if (!is)
         return NULL;
 
+    is->video_stream = -1;
+#if AUDIO_ENABLED
+    is->audio_stream = -1;
+#endif
     is->filename = av_strdup(filename);
     if (!is->filename)
         goto fail;
@@ -860,13 +864,14 @@ static void *event_loop(void *arg)
 
         while (EventQueue.isEmpty(cur_stream->handle))
         {
+            av_usleep((int64_t)(REFRESH_RATE * 1000000.0));
         }
 
         ffevent = get_event(cur_stream->handle);
 
-        // TODO: Check if read_thread is still initializing...
-        // if (!isInitialized)
-        // continue;
+        // If we don't yet have a video stream, skip all key events, because read_thread might still be initializing...
+        if (cur_stream->video_stream < 0)
+            continue;
 
         switch (ffevent)
         {

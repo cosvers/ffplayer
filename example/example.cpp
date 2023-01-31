@@ -11,31 +11,37 @@ int main()
 {
     std::string file = "/home/dragon/Videos/one-by-one-person-detection.mp4";
     std::string file1 = "/home/dragon/Videos/street_paris_1080p.mp4";
+    std::string live = "rtsp://localhost:8554/stream";
 
     VideoState *state1;
-    ffplayer_open(&state1, const_cast<char *>(file.c_str()));
+    ffplayer_open(&state1, const_cast<char *>(live.c_str()));
 
     auto a1 = std::async(std::launch::async,
                          [&]()
                          {
                              while (1)
                              {
-                                 AVPacket *pkt1 = nullptr;
+                                 AVPacket *pkt = nullptr;
 
-                                 pkt1 = av_packet_alloc();
-                                 if (!pkt1)
+                                 pkt = av_packet_alloc();
+                                 if (!pkt)
                                  {
                                      std::cout << "Could not allocate packet 1.\n";
                                  }
 
-                                 if (-1 == ffplayer_get_video_pkt(state1, pkt1))
+                                 if (-1 == ffplayer_get_video_pkt(state1, pkt))
                                  {
                                      break;
                                  }
 
-                                 std::cout << " packet1 size: " << pkt1->size << " pts: " << pkt1->pts << "\n";
+                                 if (pkt->size == 0)
+                                 {
+                                     std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                                 }
 
-                                 av_packet_free(&pkt1);
+                                 std::cout << "Packet size: " << pkt->size << " PTS: " << pkt->pts << "\n";
+
+                                 av_packet_free(&pkt);
                              }
                          });
 
