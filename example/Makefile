@@ -1,3 +1,5 @@
+# Future refernce - https://github.com/petercrona/StsQueue/blob/master/Makefile
+
 GPP = g++
 MAKEDIR = mkdir -p
 RM = rm

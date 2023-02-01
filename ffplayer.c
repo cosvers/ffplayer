@@ -839,7 +839,7 @@ static VideoState *stream_open(const char *filename)
     return is;
 }
 
-static FFEVENT get_event(EventHeader *handle)
+static FFEvent get_event(EventHeader *handle)
 {
     int event = -1;
 
@@ -854,7 +854,7 @@ static FFEVENT get_event(EventHeader *handle)
 static void *event_loop(void *arg)
 {
     VideoState *cur_stream = arg;
-    FFEVENT ffevent;
+    FFEvent ffevent;
     int quit = 0;
     double incr, pos, frac;
 

@@ -9,7 +9,7 @@ typedef enum
     FFEVENT_SEEK_F,
     FFEVENT_SEEK_B,
     FFEVENT_CLOSE
-} FFEVENT;
+} FFEvent;
 
 typedef struct EventHeader EventHeader;
 

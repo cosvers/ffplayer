@@ -34,11 +34,6 @@ int main()
                                      break;
                                  }
 
-                                 if (pkt->size == 0)
-                                 {
-                                     std::this_thread::sleep_for(std::chrono::milliseconds(10));
-                                 }
-
                                  std::cout << "Packet size: " << pkt->size << " PTS: " << pkt->pts << "\n";
 
                                  av_packet_free(&pkt);
