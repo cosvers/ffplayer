@@ -57,7 +57,7 @@ int main()
                              }
                          });
 
-    int n, ret = 0;
+    int n, ret = 0, random = 0;
     while (!ret)
     {
         std::cin >> n;
@@ -68,7 +68,8 @@ int main()
             break;
 
         case 3:
-            ret = ffplayer_seek(state, 100.0);
+            random = rand() % duration;
+            ret = ffplayer_seek(state, random);
             break;
 
         case 4:

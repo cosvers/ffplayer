@@ -1603,12 +1603,9 @@ int ffplayer_get_duration(VideoState *state)
 
     while (!state->abort_request)
     {
-        if (state->ic)
+        if (state->ic && state->ic->duration != AV_NOPTS_VALUE)
         {
-            if (state->ic->duration != AV_NOPTS_VALUE)
-                return state->ic->duration / (double)AV_TIME_BASE;
-            else
-                return -1;
+            return state->ic->duration / (double)AV_TIME_BASE;
         }
 
         av_usleep(10);
