@@ -9,7 +9,7 @@ extern "C"
 
 int main()
 {
-    std::string file = "/home/dragon/Videos/one-by-one-person-detection.mp4";
+    std::string file = "/home/dragon/Videos/worker-zone-detection.mp4";
     std::string file1 = "/home/dragon/Videos/street_paris_1080p.mp4";
     std::string live = "rtsp://localhost:8554/stream";
 
@@ -18,7 +18,6 @@ int main()
 
     int duration = ffplayer_get_duration(state);
     int fps = ffplayer_get_fps(state);
-
     if (duration > 0)
     {
         int hours, mins, secs;
@@ -31,6 +30,8 @@ int main()
 
     if (fps > 0)
         std::cout << "FPS: " << fps << "\n";
+
+    std::cout << duration << " - " << fps << "\n";
 
     auto a1 = std::async(std::launch::async,
                          [&]()
@@ -51,7 +52,7 @@ int main()
                                      break;
                                  }
 
-                                 std::cout << "Packet size: " << pkt->size << " Pos: " << curr_pos << "\n";
+                                 std::cout << "Packet size: " << pkt->size << " PTS: " << pkt->pts << " Pos: " << curr_pos << "\n";
 
                                  av_packet_free(&pkt);
                              }
