@@ -63,6 +63,8 @@
         "avdevice.h": "c",
         "limits.h": "c",
         "time.h": "c",
-        "signal.h": "c"
+        "signal.h": "c",
+        "common.h": "c",
+        "fifo.h": "c"
     }
 }

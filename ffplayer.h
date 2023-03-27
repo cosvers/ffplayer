@@ -1,6 +1,8 @@
 #ifndef FF_PLAYER_H
 #define FF_PLAYER_H
 
+#include <libavcodec/avcodec.h>
+
 typedef struct VideoState VideoState;
 
 int ffplayer_open(VideoState **state, char *input_filename);
