@@ -194,6 +194,7 @@ static int av_sync_type = AV_SYNC_AUDIO_MASTER;
 static int infinite_buffer = -1;
 double rdftspeed = 0.02;
 static int framedrop = 0;
+int loop = 0;
 
 static int packet_queue_put_private(PacketQueue *q, AVPacket *pkt)
 {
@@ -1290,8 +1291,10 @@ static void *read_thread(void *arg)
 #endif
         )
         {
-            // stream ended - seek to beginning -
-            // stream_seek(is, 0, 0, 0);
+            if (loop == 1)
+            {
+                stream_seek(is, 0, 0, 0);
+            }
         }
         ret = av_read_frame(ic, pkt);
 
@@ -1498,9 +1501,10 @@ static void *event_loop(void *arg)
     return NULL;
 }
 
-int ffplayer_open(VideoState **state, char *input_filename)
+int ffplayer_open(VideoState **state, char *input_filename, int loop_on_end)
 {
     *state = NULL;
+    loop = loop_on_end;
 
     av_log_set_flags(AV_LOG_SKIP_REPEATED);
 

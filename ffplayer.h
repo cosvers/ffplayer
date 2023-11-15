@@ -5,7 +5,7 @@
 
 typedef struct VideoState VideoState;
 
-int ffplayer_open(VideoState **state, char *input_filename);
+int ffplayer_open(VideoState **state, char *input_filename, int loop_on_end);
 int ffplayer_play_or_pause(VideoState *state);
 int ffplayer_seek(VideoState *state, double pos);
 int ffplayer_fast_seek(VideoState *state, int forward);
