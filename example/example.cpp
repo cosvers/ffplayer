@@ -9,14 +9,18 @@ extern "C"
 
 int main()
 {
-    std::string file = "/home/dragon/Videos/worker-zone-detection.mp4";
-    std::string file1 = "/home/dragon/Videos/street_paris_1080p.mp4";
+    std::string file = "/home/dragon/Videos/street_paris_1080p.mp4";
     std::string live = "rtsp://localhost:8554/stream";
+    bool isLive = false;
 
+    int duration = 0;
     VideoState *state;
-    ffplayer_open(&state, const_cast<char *>(file1.c_str()));
+    ffplayer_open(&state, const_cast<char *>(isLive ? live.c_str() : file.c_str()), 0);
 
-    int duration = ffplayer_get_duration(state);
+    if (!isLive)
+    {
+        duration = ffplayer_get_duration(state);
+    }
     int fps = ffplayer_get_fps(state);
     if (duration > 0)
     {
