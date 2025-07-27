@@ -9,8 +9,8 @@ PROG_NAME = ffplayer
 OBJ_NAME = lib$(PROG_NAME).so
 VERSION = 1
 OUTPUT = $(OBJ_NAME).$(VERSION)
-INSTALL_PATH = /usr/lib
-INCLUDE_PATH = /usr/include
+INSTALL_PATH = /usr/local/lib
+INCLUDE_PATH = /usr/local/include
 
 INCLUDE = -I .
 LIB := -pthread -lavdevice -lavutil
